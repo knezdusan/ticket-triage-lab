@@ -1,7 +1,9 @@
+from unittest.mock import patch
+
 import pytest
 from pydantic import ValidationError
 
-from triage.config import Settings
+from triage.config import Settings, get_settings, validate_provider
 
 _AZURE_ENV = {
     "LLM_PROVIDER": "azure",
@@ -27,6 +29,7 @@ _ALL_KEYS = set(_AZURE_ENV) | set(_OPENAI_COMPATIBLE_ENV)
 def _clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
     for key in _ALL_KEYS:
         monkeypatch.delenv(key, raising=False)
+    get_settings.cache_clear()
 
 
 def _set_env(monkeypatch: pytest.MonkeyPatch, values: dict[str, str]) -> None:
@@ -73,3 +76,40 @@ def test_missing_openai_key_fails_loudly(monkeypatch: pytest.MonkeyPatch) -> Non
 
     with pytest.raises(ValidationError, match="OPENAI_API_KEY"):
         Settings(_env_file=None)
+
+
+def test_api_version_defaults_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    env = {k: v for k, v in _AZURE_ENV.items() if k != "AZURE_OPENAI_API_VERSION"}
+    _set_env(monkeypatch, env)
+
+    assert Settings(_env_file=None).azure_openai_api_version == "2024-10-21"
+
+
+def test_api_version_defaults_when_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    _set_env(monkeypatch, {**_AZURE_ENV, "AZURE_OPENAI_API_VERSION": ""})
+
+    assert Settings(_env_file=None).azure_openai_api_version == "2024-10-21"
+
+
+def test_validate_provider_passes_with_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    _set_env(monkeypatch, _AZURE_ENV)
+
+    validate_provider()
+
+
+def test_validate_provider_raises_readable_error_on_missing_config() -> None:
+    with pytest.raises(RuntimeError, match="invalid triage configuration"):
+        validate_provider()
+
+
+def test_validate_provider_raises_readable_error_when_entra_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    env = {k: v for k, v in _AZURE_ENV.items() if k != "AZURE_OPENAI_API_KEY"}
+    _set_env(monkeypatch, env)
+
+    with (
+        patch("triage.llm.probe_entra_credential", side_effect=Exception("no creds")),
+        pytest.raises(RuntimeError, match="Entra ID"),
+    ):
+        validate_provider()
