@@ -1,0 +1,75 @@
+import pytest
+from pydantic import ValidationError
+
+from triage.config import Settings
+
+_AZURE_ENV = {
+    "LLM_PROVIDER": "azure",
+    "AZURE_OPENAI_ENDPOINT": "https://example.openai.azure.com/",
+    "AZURE_OPENAI_API_KEY": "test-key",
+    "AZURE_OPENAI_API_VERSION": "2024-10-21",
+    "AZURE_OPENAI_CHAT_DEPLOYMENT": "gpt-4o",
+    "AZURE_OPENAI_EMBEDDING_DEPLOYMENT": "text-embedding-3-small",
+}
+
+_OPENAI_COMPATIBLE_ENV = {
+    "LLM_PROVIDER": "openai_compatible",
+    "OPENAI_BASE_URL": "http://localhost:11434/v1",
+    "OPENAI_API_KEY": "test-key",
+    "OPENAI_CHAT_MODEL": "qwen2.5",
+    "OPENAI_EMBEDDING_MODEL": "nomic-embed-text",
+}
+
+_ALL_KEYS = set(_AZURE_ENV) | set(_OPENAI_COMPATIBLE_ENV)
+
+
+@pytest.fixture(autouse=True)
+def _clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    for key in _ALL_KEYS:
+        monkeypatch.delenv(key, raising=False)
+
+
+def _set_env(monkeypatch: pytest.MonkeyPatch, values: dict[str, str]) -> None:
+    for key, value in values.items():
+        monkeypatch.setenv(key, value)
+
+
+def test_loads_azure_settings_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    _set_env(monkeypatch, _AZURE_ENV)
+
+    settings = Settings(_env_file=None)
+
+    assert settings.llm_provider == "azure"
+    assert settings.azure_openai_endpoint == "https://example.openai.azure.com/"
+    assert settings.azure_openai_chat_deployment == "gpt-4o"
+
+
+def test_loads_openai_compatible_settings_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    _set_env(monkeypatch, _OPENAI_COMPATIBLE_ENV)
+
+    settings = Settings(_env_file=None)
+
+    assert settings.llm_provider == "openai_compatible"
+    assert settings.openai_base_url == "http://localhost:11434/v1"
+    assert settings.openai_embedding_model == "nomic-embed-text"
+
+
+def test_missing_provider_fails_loudly() -> None:
+    with pytest.raises(ValidationError, match="llm_provider"):
+        Settings(_env_file=None)
+
+
+def test_missing_azure_key_fails_loudly(monkeypatch: pytest.MonkeyPatch) -> None:
+    env = {k: v for k, v in _AZURE_ENV.items() if k != "AZURE_OPENAI_CHAT_DEPLOYMENT"}
+    _set_env(monkeypatch, env)
+
+    with pytest.raises(ValidationError, match="AZURE_OPENAI_CHAT_DEPLOYMENT"):
+        Settings(_env_file=None)
+
+
+def test_missing_openai_key_fails_loudly(monkeypatch: pytest.MonkeyPatch) -> None:
+    env = {k: v for k, v in _OPENAI_COMPATIBLE_ENV.items() if k != "OPENAI_API_KEY"}
+    _set_env(monkeypatch, env)
+
+    with pytest.raises(ValidationError, match="OPENAI_API_KEY"):
+        Settings(_env_file=None)
