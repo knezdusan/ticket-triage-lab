@@ -11,24 +11,6 @@ Full context, data model, milestones and decision log: `docs/BLUEPRINT.md`. Read
 
 Done means all three lint/test commands pass. Never report work as finished without running them.
 
-## Ownership — the most important rule
-This project exists so a human builds recall by writing key parts by hand.
-You must NOT write implementation code for:
-- Pydantic models in `src/triage/models.py`
-- the three gate functions (rules, similarity, model classification)
-- the evaluation harness logic
-
-For these you may explain, review, suggest, and write tests. If a task requires writing them, stop and say so.
-Everything else (scaffolding, config, data generation, scripts, test plumbing, CLI, docs) is yours.
-
-## Hard rules
-- Import the `openai` and `azure` SDKs only in `src/triage/llm.py`. Everything else uses `ChatModel` / `EmbeddingModel`.
-- Callers never pass a model or deployment name.
-- Treat model output as untrusted input: validate against Pydantic, reject on failure, never patch.
-- Tests never touch the network. Mock the SDK.
-- Type hints on every function.
-- Do not add LangChain, Semantic Kernel, LlamaIndex, FastAPI, or any orchestration framework without a recorded decision in `docs/BLUEPRINT.md` §10.
-
 ## Never
 - Run git commands. Hand the human the exact commands instead.
 - Run `smoke.py` or anything else that needs real credentials.

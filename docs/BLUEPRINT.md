@@ -196,6 +196,8 @@ tests/          no network calls, ever
 | D6 | API key auth, Entra fallback | simplest for a personal lab; Entra path mirrors enterprise practice |
 | D7 | Empty env values fall back to defaults | avoids a silent `""` overriding a working default |
 | D8 | Repo and directory named `ticket-triage-lab` | not named after any employer |
+| D9 | Fixed label taxonomy as `StrEnum`s in `models.py`: `TicketType` (4), `Level` for both impact and urgency (3), `Priority` (4), `Tier` (3), `AssignmentGroup` (8, display values), `Category` (12, snake_case) | one shared enum set is the contract the gates emit and the evaluation scores against; string values keep JSON output human-readable |
+| D10 | TypeSafe (Jev) not adopted; its design ideas adopted instead — decomposed judgments, priority derived in code, confidence from probability spread rather than self-report; optional comparison experiment Tue 29 if time allows | reviewed 22 Sep: not NTT's stack, early access, data-handling unlikely to be approved for customer tickets, weaker on non-native English and long inputs |
 
 ---
 
