@@ -26,9 +26,12 @@ _ALL_KEYS = set(_AZURE_ENV) | set(_OPENAI_COMPATIBLE_ENV)
 
 
 @pytest.fixture(autouse=True)
-def _clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
+def _clean_env(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     for key in _ALL_KEYS:
         monkeypatch.delenv(key, raising=False)
+    # Point pydantic-settings at a non-existent file so a real .env on the
+    # machine can never leak into tests.
+    monkeypatch.setitem(Settings.model_config, "env_file", tmp_path / "no-such.env")
     get_settings.cache_clear()
 
 

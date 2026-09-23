@@ -58,13 +58,42 @@ class Category(StrEnum):
     TRANSPORT_CHANGE = "transport_change"
 
 
-#  -------------- Pydantic Models --------------
-class TriagedTicket(BaseModel):
-    """Placeholder output schema for a triaged support ticket."""
+# --------- Helper Functions ---------
 
-    category: str
-    priority: str
-    summary: str
+
+def derive_priority(impact: Level | str, urgency: Level | str) -> Priority:
+    """
+    Derives ticket priority (P1-P4) from Impact and Urgency levels.
+
+    Matrix:
+      Impact \\ Urgency | HIGH | MEDIUM | LOW
+      ------------------+------+--------+-----
+      HIGH              |  P1  |   P2   |  P3
+      MEDIUM            |  P2  |   P3   |  P4
+      LOW               |  P3  |   P4   |  P4
+    """
+
+    impact = str(impact).lower()
+    urgency = str(urgency).lower()
+
+    match (impact, urgency):
+        case (Level.HIGH, Level.HIGH):
+            return Priority.P1
+
+        case (Level.HIGH, Level.MEDIUM) | (Level.MEDIUM, Level.HIGH):
+            return Priority.P2
+
+        case (Level.HIGH, Level.LOW) | (Level.MEDIUM, Level.MEDIUM) | (Level.LOW, Level.HIGH):
+            return Priority.P3
+
+        case (Level.MEDIUM, Level.LOW) | (Level.LOW, Level.MEDIUM) | (Level.LOW, Level.LOW):
+            return Priority.P4
+
+        case _:
+            raise ValueError(f"Invalid combination: {impact}, {urgency}")
+
+
+#  -------------- Pydantic Models --------------
 
 
 class TicketInput(BaseModel):
@@ -142,38 +171,3 @@ class TriageVerdict(BaseModel):
         elif any(label is None for label in labels):
             raise ValueError("A decided verdict must have all 4 labels set")
         return self
-
-
-# --------- Helper Functions ---------
-
-
-def derive_priority(impact: Level | str, urgency: Level | str) -> Priority:
-    """
-    Derives ticket priority (P1-P4) from Impact and Urgency levels.
-
-    Matrix:
-      Impact \\ Urgency | HIGH | MEDIUM | LOW
-      ------------------+------+--------+-----
-      HIGH              |  P1  |   P2   |  P3
-      MEDIUM            |  P2  |   P3   |  P4
-      LOW               |  P3  |   P4   |  P4
-    """
-
-    impact = str(impact).lower()
-    urgency = str(urgency).lower()
-
-    match (impact, urgency):
-        case (Level.HIGH, Level.HIGH):
-            return Priority.P1
-
-        case (Level.HIGH, Level.MEDIUM) | (Level.MEDIUM, Level.HIGH):
-            return Priority.P2
-
-        case (Level.HIGH, Level.LOW) | (Level.MEDIUM, Level.MEDIUM) | (Level.LOW, Level.HIGH):
-            return Priority.P3
-
-        case (Level.MEDIUM, Level.LOW) | (Level.LOW, Level.MEDIUM) | (Level.LOW, Level.LOW):
-            return Priority.P4
-
-        case _:
-            raise ValueError(f"Invalid combination: {impact}, {urgency}")

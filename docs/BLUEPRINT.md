@@ -133,6 +133,8 @@ The harness runs the full cascade over the held-out set and reports:
 
 A result is only reported with its sample size. No accuracy figure on fewer than ~30 cases without saying so.
 
+**Every accuracy figure is reported against its ceiling.** `triage.ceiling` computes, from `taxonomy.py` alone, the best achievable assignment-group accuracy (~88% — multi-group categories cap it) and type accuracy (~90% — problem/incident and change/service_request are textually indistinguishable). A raw accuracy number without its ceiling is meaningless here.
+
 ---
 
 ## 8. Code layout and conventions
@@ -140,11 +142,14 @@ A result is only reported with its sample size. No accuracy figure on fewer than
 ```
 src/triage/
   config.py     Settings (pydantic-settings), validate_provider()
-  llm.py        ChatModel, EmbeddingModel, get_chat_model(), get_embedding_model()
+  llm.py        ChatModel, EmbeddingModel, TransientLLMError, get_chat_model(), get_embedding_model()
   models.py     Pydantic models (human-written)
+  utils.py      retry(), chunks()
+  taxonomy.py   synthetic-data sampling rules as plain data
+  datagen.py    synthetic ticket generator: uv run python -m triage.datagen [--dry-run] [--n N]
   smoke.py      live end-to-end check: uv run python -m triage.smoke
   (planned) rules.py · similarity.py · classifier.py · cascade.py · retrieval.py · evaluate.py
-data/           synthetic tickets (planned)
+data/           tickets.jsonl · history.jsonl · eval.jsonl · clusters.json · REPORT.md (written by datagen)
 tests/          no network calls, ever
 ```
 
@@ -170,7 +175,7 @@ tests/          no network calls, ever
 |---|---|---|
 | Sun 20 Sep | Azure account + budget alert · repo scaffold · provider boundary · ITSM vocabulary | **Done** — smoke test green against live Azure |
 | Mon 21 | Python idiom and type hints (keyboard, no agent) | In progress |
-| Tue 22 | Pydantic models (human) · synthetic ticket generator (agent) | — |
+| Tue 22 | Pydantic models (human) · synthetic ticket generator (agent) | Models done (32 tests green) · generator + priority-signal phrasings + P1/P2 stress set, dry-run verified; live generation pending |
 | Wed 23 | Azure OpenAI patterns · review and fix synthetic data | — |
 | Thu 24 | Gate 1 rules · Gate 2 similarity | — |
 | Fri 25 | Gate 3 model classification · cascade wiring | — |
@@ -198,6 +203,16 @@ tests/          no network calls, ever
 | D8 | Repo and directory named `ticket-triage-lab` | not named after any employer |
 | D9 | Fixed label taxonomy as `StrEnum`s in `models.py`: `TicketType` (4), `Level` for both impact and urgency (3), `Priority` (4), `Tier` (3), `AssignmentGroup` (8, display values), `Category` (12, snake_case) | one shared enum set is the contract the gates emit and the evaluation scores against; string values keep JSON output human-readable |
 | D10 | TypeSafe (Jev) not adopted; its design ideas adopted instead — decomposed judgments, priority derived in code, confidence from probability spread rather than self-report; optional comparison experiment Tue 29 if time allows | reviewed 22 Sep: not NTT's stack, early access, data-handling unlikely to be approved for customer tickets, weaker on non-native English and long inputs |
+| D11 | Datagen: all labels sampled in code (seed 42, `taxonomy.py` weights); the model writes only ticket text via `GeneratedText`; leak check rejects text mentioning priority/impact/urgency or P1–P4; ~10% near-duplicate clusters stay atomic across the history/eval split; SDK rate-limit/timeout/connection errors surface as `TransientLLMError` | keeps labels honest (no model self-labelling), reproducible plans, and prevents near-dupes leaking from eval into Gate 2 retrieval |
+| D12 | Datagen carries impact/urgency into text as business-fact phrasings (`IMPACT_SITUATIONS` / `URGENCY_SITUATIONS`), stored on the plan; `--stress N` emits a separate P1/P2-only `eval_p1.jsonl`, IDs continuing the main sequence, excluded from all counts | without the severity signal in text, priority is unpredictable and the eval metric meaningless; the stress set measures P1 confusion without distorting the realistic distribution |
+| D13 | master_data's assignment group follows the sampled sap_module (MM→MM, FI→FI, SD→SD), never drawn independently; `LOW_URGENCY_GUARD` prompt sentence appended only for low-urgency tickets; `DATE_RANGE` capped at 2026-09-22; `triage.ceiling` computes label-noise accuracy ceilings; `scripts/audit_data.py` audits generated text offline | fixes label/text coherence bugs found on the first live run; ceilings keep eval honest; the audit catches verbatim phrasing leaks and pressure words in low-urgency tickets before data review |
+| D14 | Stress set composition fixed by construction: ceil(N/2) P1 incidents (high x high) + floor(N/2) P2 across P2-capable types weighted by TYPE_MIX | renormalised sampling made P1 nearly vanish (3 of 40); a set meant to measure severe-end confusion must not leave P1 to chance |
+| D15 | Impact guards mirror the urgency guard: LOW_IMPACT_GUARD (one person only, no team/site/company, nothing "down") and MEDIUM_IMPACT_GUARD (a team, not site-wide, others work normally), appended in _prompt per impact level | audit found 74/122 low-impact tickets claiming wider scope — impact text inflates, which caps derivable priority accuracy |
+| D16 | Logprobs work with structured output | Verified live 23 Sep on Azure `2024-10-21` gpt-4o. Pydantic `parse` natively returns logprobs. Grammar-constrained syntax tokens (`{"`, `category`) are 100%; the first distinguishing value token yields genuine confidence when normalized across category candidates (73%–100%). Friday Gate 3 will use native logprob confidence. |
+| D17 | Schema constraints silently accepted | Azure OpenAI does NOT return HTTP 400 for unsupported validation constraints (`max_length`, `pattern`, `ge/le`). It silently accepts the schema and relies entirely on client-side Pydantic enforcement. Model-facing schemas must stay lean (`Gate3Output`), validating into `TriageVerdict` on our side. |
+| D18 | Measured Gate 3 cost ($1.74 / 1k) | Measured across real SAP tickets: mean 386 input tokens, 78 output tokens per ticket. Using Sweden Central Standard `gpt-4o` rates ($2.50/M input, $10.00/M output), cost is $0.00174 per ticket ($1.74 per 1,000; $174 per 100k). Replaces the initial ~800 token / $3.00 estimate. |
+| D19 | Deployment capacity is 300 RPM (50k TPM) | Read from Azure Foundry deployment page: 50k TPM corresponds to 300 RPM. Because short completions release reserved tokens immediately upon response termination, burst capacity is high (absorbed 60 concurrent calls). Recommended safe sustained worker pool is 5–10 concurrent requests. |
+| D20 | Retry decorator lacks exponential backoff | The current `@retry` decorator retries immediately without delay or inspecting Azure's `retry-after` header. Documented as a prototype limitation; safe for controlled lab runs, but exponential backoff + jitter is required for unattended production workloads. |
 
 ---
 
