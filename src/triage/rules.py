@@ -12,6 +12,7 @@ import time
 from dataclasses import dataclass
 
 from triage.models import (
+    LABEL_FIELDS,
     AssignmentGroup,
     Category,
     Priority,
@@ -166,6 +167,7 @@ def apply_rules(ticket: TicketInput) -> TriageVerdict | None:
         assignment_group=rule.assignment_group,
         confidence=rule.confidence,
         decided_by="rules",
+        label_source=dict.fromkeys(LABEL_FIELDS, "rules"),
         rationale=rule.rationale,
         similar_ticket_ids=[],
         cost_usd=0.0,

@@ -42,6 +42,9 @@ _TRANSIENT_SDK_ERRORS = (RateLimitError, APITimeoutError, APIConnectionError)
 GPT4O_INPUT_COST_PER_TOKEN = 2.50 / 1_000_000
 GPT4O_OUTPUT_COST_PER_TOKEN = 10.00 / 1_000_000
 
+# Pricing for text-embedding-3-small (Standard tier)
+EMBEDDING_COST_PER_TOKEN = 0.02 / 1_000_000
+
 
 def cost_usd(prompt_tokens: int, completion_tokens: int) -> float:
     """Calculate call cost in USD from token counts."""

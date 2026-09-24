@@ -145,6 +145,11 @@ class GeneratedText(BaseModel):
     description: str
 
 
+LabelField = Literal["type", "category", "priority", "assignment_group"]
+LabelSource = Literal["rules", "similarity", "model"]
+LABEL_FIELDS: tuple[LabelField, ...] = ("type", "category", "priority", "assignment_group")
+
+
 class TriageVerdict(BaseModel):
     """Final output of the triage cascade: labels plus observability metadata."""
 
@@ -155,8 +160,13 @@ class TriageVerdict(BaseModel):
     category: Category | None = None
     priority: Priority | None = None
     assignment_group: AssignmentGroup | None = None
+    # Gate-3 derivation inputs — observability, not labels; not part of
+    # label_source (they explain how `priority` was derived).
+    impact: Level | None = None
+    urgency: Level | None = None
     confidence: float = Field(ge=0.0, le=1.0)
-    decided_by: Literal["rules", "similarity", "model", "abstain"]
+    decided_by: Literal["rules", "similarity", "model", "abstain", "cascade"]
+    label_source: dict[LabelField, LabelSource] = Field(default_factory=dict)
     rationale: str = Field(max_length=300)
     similar_ticket_ids: list[str] = Field(default_factory=list)
     cost_usd: float = Field(ge=0.0, default=0.0)
@@ -168,6 +178,9 @@ class TriageVerdict(BaseModel):
         if self.decided_by == "abstain":
             if any(label is not None for label in labels):
                 raise ValueError("Abstaining verdict must have all labels set to None")
-        elif any(label is None for label in labels):
-            raise ValueError("A decided verdict must have all 4 labels set")
+        elif all(label is None for label in labels):
+            raise ValueError("A decided verdict must set at least one label")
+        populated = {f for f, v in zip(LABEL_FIELDS, labels, strict=True) if v is not None}
+        if set(self.label_source) != populated:
+            raise ValueError("label_source must name exactly the populated labels")
         return self

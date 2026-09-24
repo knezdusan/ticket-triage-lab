@@ -46,6 +46,12 @@ VERDICT = {
     "assignment_group": "ABAP",
     "confidence": 0.82,
     "decided_by": "similarity",
+    "label_source": {
+        "type": "similarity",
+        "category": "similarity",
+        "priority": "similarity",
+        "assignment_group": "similarity",
+    },
     "rationale": "Three nearest resolved tickets agree.",
     "similar_ticket_ids": ["INC000045"],
 }
@@ -211,7 +217,45 @@ def test_verdict_abstain_with_labels_rejected():
 
 def test_verdict_decision_without_labels_rejected():
     with pytest.raises(ValidationError):
-        TriageVerdict(**{**VERDICT, "category": None})
+        TriageVerdict(
+            **{
+                **VERDICT,
+                "type": None,
+                "category": None,
+                "priority": None,
+                "assignment_group": None,
+            }
+        )
+
+
+def test_verdict_partial_labels_accepted():
+    """Gates may fill a subset of labels; at least one is required."""
+    v = TriageVerdict(
+        **{
+            **VERDICT,
+            "priority": None,
+            "type": None,
+            "label_source": {
+                "category": "similarity",
+                "assignment_group": "similarity",
+            },
+        }
+    )
+    assert v.category is not None
+    assert v.priority is None
+
+
+def test_verdict_label_source_must_match_populated_labels():
+    """Provenance is an invariant: sources name exactly the labels set."""
+    with pytest.raises(ValidationError):
+        TriageVerdict(**{**VERDICT, "label_source": {"category": "similarity"}})
+    with pytest.raises(ValidationError):
+        TriageVerdict(
+            **{
+                **VERDICT,
+                "label_source": {**VERDICT["label_source"], "extra": "model"},
+            }
+        )
 
 
 def test_note_lax_mode_coerces_strings():
