@@ -57,6 +57,11 @@ class SimilarityIndex:
         self.tickets = tickets
         self.matrix = matrix
         self.fingerprint = fingerprint
+        self._by_id = {t.ticket_id: t for t in tickets}
+
+    def by_id(self, ticket_id: str) -> LabelledTicket | None:
+        """O(1) ticket lookup — used to fetch few-shot neighbours for Gate 3."""
+        return self._by_id.get(ticket_id)
 
     @classmethod
     def build(cls, tickets: list[LabelledTicket], embedder: EmbeddingModel) -> "SimilarityIndex":
@@ -229,9 +234,6 @@ def apply_similarity_partial(
     if not labels:
         return None
 
-    agreeing = [
-        (t, score) for t, score in neighbours if all(getattr(t, f) == labels[f] for f in labels)
-    ]
     usage = getattr(embedder, "last_usage", None)
     cost = (usage.prompt_tokens * EMBEDDING_COST_PER_TOKEN) if usage else 0.0
 
@@ -248,7 +250,9 @@ def apply_similarity_partial(
             f"Top-1 similarity {top1:.2f} >= {threshold}; "
             f"locked {sorted(labels)} (priority left for downstream)."
         ),
-        similar_ticket_ids=[t.ticket_id for t, _ in agreeing],
+        # All consulted neighbours — including dissenters. Gate 3 consumes
+        # them as few-shot examples; disagreement is signal, not noise.
+        similar_ticket_ids=[t.ticket_id for t, _ in neighbours],
         cost_usd=cost,
         latency_ms=(time.perf_counter() - start) * 1000.0,
     )

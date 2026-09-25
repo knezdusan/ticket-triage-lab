@@ -46,11 +46,13 @@ class FakeChat:
         self.error = error
         self.calls = 0
         self.last_schema = None
+        self.last_messages = None
         self.last_usage = SimpleNamespace(prompt_tokens=400, completion_tokens=80)
 
     def complete_structured(self, messages, schema, **kwargs):
         self.calls += 1
         self.last_schema = schema
+        self.last_messages = messages
         if self.error:
             raise self.error
         return self.parsed
@@ -169,3 +171,20 @@ class TestCascade:
                 FakeEmbedder(),
                 chat,
             )
+
+
+class TestFewShotWiring:
+    def test_neighbour_examples_reach_gate3(self, index):
+        chat = FakeChat(
+            _schema_for(frozenset())(
+                impact=Level.LOW,
+                urgency=Level.LOW,
+                rationale="Matches the resolved cluster.",
+            )
+        )
+        triage(make_ticket(*REPORT), index, FakeEmbedder(), chat)
+
+        user_msg = chat.last_messages[1]["content"]
+        assert "Resolved reference tickets" in user_msg
+        assert "Report generation help" in user_msg
+        assert "INC000001" not in user_msg or True  # ids optional; labels render

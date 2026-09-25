@@ -306,3 +306,13 @@ class TestApplySimilarityPartial:
         assert verdict.category is None
         assert verdict.type == TicketType.SERVICE_REQUEST
         assert verdict.assignment_group == AssignmentGroup.SERVICE_DESK
+
+
+class TestIndexLookup:
+    def test_by_id_resolves(self, index):
+        ticket = index.by_id("REQ000001")
+        assert ticket is not None
+        assert ticket.category == Category.PASSWORD_ACCOUNT
+
+    def test_by_id_unknown_returns_none(self, index):
+        assert index.by_id("INC999999") is None

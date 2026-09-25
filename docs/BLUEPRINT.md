@@ -3,7 +3,7 @@
 > Single source of truth for this project. Read it in full before doing any work.
 > Humans and agents both work from this file. When reality changes, update this file in the same change.
 
-Last updated: 2026-09-21
+Last updated: 2026-09-25
 
 ---
 
@@ -142,15 +142,27 @@ A result is only reported with its sample size. No accuracy figure on fewer than
 ```
 src/triage/
   config.py     Settings (pydantic-settings), validate_provider()
-  llm.py        ChatModel, EmbeddingModel, TransientLLMError, get_chat_model(), get_embedding_model()
-  models.py     Pydantic models (human-written)
+  llm.py        ChatModel, EmbeddingModel, TransientLLMError, cost_usd
+  models.py     Pydantic models (human-written): TicketInput, LabelledTicket, TriageVerdict
+  rules.py      Gate 1: deterministic rules, urgency veto & domain collision split
+  similarity.py Gate 2: NumPy cosine similarity index, .npz caching, by_id lookup, partial unbundled emission
+  classifier.py Gate 3: structured output via dynamic schemas, ITIL decomposed rubric, few-shot examples, temp=0.0
+  cascade.py    Assembly line pipeline: rules -> similarity -> model, provenance merge
+  evaluate.py   Wilson score intervals, 4x4 confusion matrix, severe over/under-calls, ceiling ratios
+  ceiling.py    label-noise accuracy ceilings computed from taxonomy.py
+  probe.py      structured-output / logprob probes used on Wed 23
   utils.py      retry(), chunks()
   taxonomy.py   synthetic-data sampling rules as plain data
   datagen.py    synthetic ticket generator: uv run python -m triage.datagen [--dry-run] [--n N]
   smoke.py      live end-to-end check: uv run python -m triage.smoke
-  (planned) rules.py · similarity.py · classifier.py · cascade.py · retrieval.py · evaluate.py
-data/           tickets.jsonl · history.jsonl · eval.jsonl · clusters.json · REPORT.md (written by datagen)
-tests/          no network calls, ever
+scripts/
+  eval_cascade.py  full cascade runner over eval.jsonl / eval_p1.jsonl, Wilson intervals + confusion matrix
+  eval_gate1.py    Gate 1 coverage/precision over history.jsonl
+  eval_gate2.py    Gate 2 leave-one-out calibration sweep across (k, theta)
+  audit_urgency.py per-ticket urgency adjudication dump -> data/eval_verdicts.jsonl
+  audit_data.py    offline data audit for phrasing leaks and guardrail compliance
+data/           tickets.jsonl · history.jsonl · eval.jsonl · eval_p1.jsonl · history_index.npz · clusters.json · eval_verdicts.jsonl · REPORT.md
+tests/          165 offline unit tests (100% mocked, zero network calls)
 ```
 
 **Rules that do not bend**
@@ -175,13 +187,13 @@ tests/          no network calls, ever
 |---|---|---|
 | Sun 20 Sep | Azure account + budget alert · repo scaffold · provider boundary · ITSM vocabulary | **Done** — smoke test green against live Azure |
 | Mon 21 | Python idiom and type hints (keyboard, no agent) | In progress |
-| Tue 22 | Pydantic models (human) · synthetic ticket generator (agent) | Models done (32 tests green) · generator + priority-signal phrasings + P1/P2 stress set, dry-run verified; live generation pending |
-| Wed 23 | Azure OpenAI patterns · review and fix synthetic data | — |
-| Thu 24 | Gate 1 rules · Gate 2 similarity | — |
-| Fri 25 | Gate 3 model classification · cascade wiring | — |
-| Sat 26 | Retrieval on Azure AI Search (fallback pgvector) | — |
+| Tue 22 | Pydantic models (human) · synthetic ticket generator (agent) | **Done** — models (32 tests green) · 240 history + 60 eval + 60 P1/P2 stress tickets generated live |
+| Wed 23 | Azure OpenAI patterns · review and fix synthetic data | **Done** — structured outputs + logprobs verified live (D16–D18); data audit fixes (D12–D15) |
+| Thu 24 | Gate 1 rules · Gate 2 similarity | **Done** — Gate 1 100% precision @ ~2.5% coverage; Gate 2 leave-one-out calibration sweep (k=1, θ=0.75 → 95.9% category accuracy) |
+| Fri 25 | Gate 3 model classification · cascade wiring · Evaluation harness (pulled forward) | **Done** — assembly-line cascade with validated `label_source`, dynamic schema factory, ITIL decomposed rubric, 95% Wilson intervals, 4x4 confusion matrix, P1 stress validation (96.7% recall), temperature pinned to 0.0 |
+| Sat 26 | Retrieval on Azure AI Search (fallback pgvector) | Up next |
 | Sun 27 | **Rest** | — |
-| Mon 28 | Evaluation harness | — |
+| Mon 28 | Evaluation harness | **Completed early on Fri 25** (buffer day / catch-up / review) |
 | Tue 29 | Document Intelligence (half day) · SAP BTP / ServiceNow orientation | Droppable |
 | Wed 30 | README, tidy, delete nothing yet, rest | — |
 
@@ -213,9 +225,11 @@ tests/          no network calls, ever
 | D18 | Measured Gate 3 cost ($1.74 / 1k) | Measured across real SAP tickets: mean 386 input tokens, 78 output tokens per ticket. Using Sweden Central Standard `gpt-4o` rates ($2.50/M input, $10.00/M output), cost is $0.00174 per ticket ($1.74 per 1,000; $174 per 100k). Replaces the initial ~800 token / $3.00 estimate. |
 | D19 | Deployment capacity is 300 RPM (50k TPM) | Read from Azure Foundry deployment page: 50k TPM corresponds to 300 RPM. Because short completions release reserved tokens immediately upon response termination, burst capacity is high (absorbed 60 concurrent calls). Recommended safe sustained worker pool is 5–10 concurrent requests. |
 | D20 | Retry decorator lacks exponential backoff | The current `@retry` decorator retries immediately without delay or inspecting Azure's `retry-after` header. Documented as a prototype limitation; safe for controlled lab runs, but exponential backoff + jitter is required for unattended production workloads. |
-| D21 | Gate 1 measured: 2.5% coverage @ 100% precision | `scripts/eval_gate1.py` over `history.jsonl` (240 tickets). Baseline with helpdesk vocabulary in the veto (`error`, `unable`, `fail`): 1.7% coverage, 75% precision. Fix: split veto into urgency/scope (`_URGENCY_VETO`) vs second-domain markers (`_DOMAIN_CONFLICT`). The ceiling is pattern recall, not the veto: most `access_authorization` tickets are phrased as incidents ("unable to access", "authorization issue"), not provisioning requests — widening patterns adds more P3 mislabels than P4 gains. `access_request` confidence set to 0.85: only ~80% of access tickets route to Security (rest to Service Desk). |
-| D22 | Gate 2 first sweep: similarity lacks dynamic range here | Leave-one-out sweep over 240 embedded history tickets: top-1 cosine scores span ~0.65–0.88 with mass at 0.70–0.85 — the corpus is too domain-homogeneous for distance alone to separate. Best row (k=3, θ=0.75): 5.8% coverage @ 50% novel full-verdict precision; θ≥0.88 never fires. Per-field decomposition pending before design changes — hypothesis: `priority` (impact×urgency narrative) is what embeddings can't carry; `category`/`assignment_group` (topic) may be fine. |
-| D23 | Cascade assembly-line & decomposed priority rubric | Shifted from all-or-nothing gates to sequential field filling with validated `label_source` provenance. Gate 2 fills category at 95.9% accuracy (k=1, θ=0.75). Injecting explicit ITIL impact/urgency rubrics into Gate 3 jumped priority accuracy from 43.3% to 66.7% (40.4% → 64.9% model-source). Diagnostic split revealed impact at 91.2% vs urgency at 61.4% (bounded by synthetic label noise where 18% of low-urgency tickets contain urgency language). Assignment group reached 80.0% against the 88.0% ceiling. Cascade cost: $2.33 / 1,000 tickets; mean latency 1548ms. |
+| D21 | Gate 1 urgency veto and domain conflict split | Separated non-routine language into `_URGENCY_VETO` (severity words like "outage", "production halted") and `_DOMAIN_CONFLICT` (mentions of other tcodes/modules like "ME21N", "IDoc"). Normal helpdesk problem verbs ("unable", "error", "cannot") were removed from the veto after measuring that they collapsed coverage to ~0%. Result: 100% precision at ~2.5% honest coverage across all 4 fields. The ceiling is pattern recall, not the veto: most `access_authorization` tickets are phrased as incidents ("unable to access"), not provisioning requests — widening patterns adds more P3 mislabels than P4 gains. |
+| D22 | Sequential assembly-line cascade & validated provenance | Shifted from all-or-nothing gates to an assembly-line cascade where gates collaborate. `TriageVerdict` was relaxed to allow partial label states and gained `decided_by="cascade"`. `label_source` was introduced as a validated Pydantic invariant (must name exactly the populated labels). The Gate 2 sweep first showed similarity lacks dynamic range on this corpus (top-1 cosines span ~0.65–0.88, mass at 0.70–0.85 — too homogeneous for distance alone to separate), so Gate 2 unbundled its emissions: k=1, θ=0.75 emits category at 95.9% accuracy while leaving priority open. Gate 3 dynamically constructs Pydantic schemas (`create_model`) omitting locked fields, structurally preventing the LLM from overriding earlier gates. Azure D17 schema silence handled via defensive `rationale[:300]` truncation. |
+| D23 | Decomposed priority rubric & ground-truth label noise | Priority is never asked directly of Gate 3; it predicts `impact: Level` and `urgency: Level`, and Python mechanically computes `derive_priority()`. Injecting explicit ITIL rubrics into `_SYSTEM_PROMPT` jumped priority from 43.3% to 66.7% (40.4% → 64.9% model-source). Diagnostic split showed impact at 93.0% vs urgency at 61.4%. Manual adjudication of 21 urgency misses revealed that ~half were synthetic label faults caused by a structural conflict in `datagen.py` (`IMPACT_SITUATIONS[high]` generates complete-stoppage text despite a sampled `urgency=low`). Real model error isolated to scope-to-urgency bleed (addressed via anti-bleed prompt lines); effective urgency accuracy ≈79%. |
+| D24 | Few-shot in-context learning null result | Passed Gate 2's consulted historical neighbours (incl. dissenters — contrastive signal) into Gate 3's prompt with their resolved labels via `SimilarityIndex.by_id` O(1) lookup. Measurement showed no statistically detectable accuracy change (all deltas ≤1.8 pts on n=57–60, well inside the ±12-pt Wilson interval) while cost rose +23% ($2.33 → $2.86/1k). Kept in code as structural grounding, but documented as an empirical null result consistent with the adjudication finding: retrieval context cannot overcome ground-truth label noise; remaining model error is ~5 tickets, below eval resolution. Side effect: `eval_gate2.py` twin% now means "twin among consulted neighbours" — a more honest memorization measure. |
+| D25 | Statistical evaluation harness, non-determinism fix, and P1 safety | Implemented `evaluate.py`: 95% Wilson score confidence intervals, 4x4 confusion matrix, ceiling ratios, severe under-call detection (P1→P3/P4, P2→P4), and severe over-call detection (P3/P4→P1, P4→P2). Discovered evaluation non-determinism caused a ±6.6-point sampling swing between identical runs; pinned `temperature=0.0` at the Gate 3 call site for reproducible evaluations. Realistic eval (n=60): assignment group 78.3% (89.0% of the 88.0% ceiling); type 71.7% (79.7% of the 90.0% ceiling); category 95.0%; priority 68.3% with 0 severe under-calls and 4 severe over-calls. P1 stress set (n=60): 96.7% P1 recall (29/30 caught as P1, 1 as P2, none dropped below P2), 82.9% P1 precision — graded honestly on a set containing no low-severity tickets, so it partly rewards the model's escalation bias; 1 severe under-call across 120 total evaluations. |
 
 ---
 

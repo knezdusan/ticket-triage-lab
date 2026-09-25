@@ -12,6 +12,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 from triage.cascade import triage
+from triage.evaluate import ceiling_ratio, format_interval, format_priority_confusion
 from triage.llm import EmbeddingModel, get_chat_model, get_embedding_model
 from triage.models import LABEL_FIELDS, LabelledTicket, TriageVerdict
 from triage.similarity import SimilarityIndex
@@ -35,6 +36,15 @@ class CachedEmbedder:
         return out
 
 
+# Known taxonomy ceilings — accuracy above these is impossible on text alone
+# (multi-group categories route ambiguously; problem/incident and
+# change/service_request pairs can be textually identical).
+CEILINGS = {
+    "type": 0.90,
+    "assignment_group": 0.88,
+}
+
+
 def _load(path: Path) -> list[LabelledTicket]:
     return [
         LabelledTicket.model_validate(json.loads(line))
@@ -54,10 +64,14 @@ def report(results: list[tuple[LabelledTicket, TriageVerdict]]) -> None:
     for truth, verdict in results:
         hits.update(f for f in LABEL_FIELDS if getattr(verdict, f) == getattr(truth, f))
     all4 = sum(all(getattr(v, f) == getattr(t, f) for f in LABEL_FIELDS) for t, v in results)
-    print("\nper-field accuracy:")
+    print("\nper-field accuracy (95% Wilson):")
     for f in LABEL_FIELDS:
-        print(f"  {f:<18} {hits[f]}/{n} ({hits[f] / n:.1%})")
-    print(f"  {'ALL FOUR':<18} {all4}/{n} ({all4 / n:.1%})")
+        line = f"  {f:<18} {hits[f]:>2}/{n} ({format_interval(hits[f], n)})"
+        if f in CEILINGS:
+            ratio = ceiling_ratio(hits[f] / n, CEILINGS[f])
+            line += f" | {ratio:>5.1%} of {CEILINGS[f]:.1%} ceiling"
+        print(line)
+    print(f"  {'ALL FOUR':<18} {all4:>2}/{n} ({format_interval(all4, n)})")
 
     # 1b. Gate-3 severity inputs — which axis is failing priority?
     for axis in ("impact", "urgency"):
@@ -65,7 +79,8 @@ def report(results: list[tuple[LabelledTicket, TriageVerdict]]) -> None:
         if scored:
             correct = sum(getattr(v, axis) == getattr(t, axis) for t, v in scored)
             print(
-                f"  {axis:<18} {correct}/{len(scored)} ({correct / len(scored):.1%}) [gate-3 only]"
+                f"  {axis:<18} {correct}/{len(scored)} "
+                f"({format_interval(correct, len(scored))}) [gate-3 only]"
             )
 
     # 2. Provenance breakdown
@@ -96,7 +111,21 @@ def report(results: list[tuple[LabelledTicket, TriageVerdict]]) -> None:
             total = field_totals[f][source]
             if total:
                 acc = field_hits[f][source] / total
-                print(f"  {f:<18} {source:<11} {acc:>7.1%} {total:>4}")
+                print(
+                    f"  {f:<18} {source:<11} {acc:>7.1%} {total:>4} "
+                    f"{format_interval(field_hits[f][source], total)}"
+                )
+
+    # 3b. Priority confusion — off-by-one drift vs catastrophic under-calls
+    print(f"\n{'=' * 74}")
+    print("PRIORITY CONFUSION MATRIX")
+    print("=" * 74)
+    print(
+        format_priority_confusion(
+            [t.priority for t, v in results if v.priority is not None],
+            [v.priority for t, v in results if v.priority is not None],
+        )
+    )
 
     # 4. Cost & latency
     total_cost = sum(v.cost_usd for _, v in results)

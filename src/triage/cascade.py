@@ -66,7 +66,16 @@ def triage(
     if _complete(merged):
         return merged
 
-    result = classify_ticket_gate3(ticket, chat, merged)
+    examples = (
+        [
+            neighbour
+            for tid in merged.similar_ticket_ids
+            if (neighbour := index.by_id(tid)) is not None
+        ]
+        if merged is not None
+        else None
+    )
+    result = classify_ticket_gate3(ticket, chat, merged, examples=examples)
     if result is not None:
         return result
     return TriageVerdict(

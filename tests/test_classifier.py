@@ -28,12 +28,14 @@ class FakeChat:
         self.last_schema = None
         self.last_messages = None
         self.calls = 0
+        self.last_kwargs = None
         self.last_usage = SimpleNamespace(prompt_tokens=400, completion_tokens=80)
 
     def complete_structured(self, messages, schema, **kwargs):
         self.calls += 1
         self.last_messages = messages
         self.last_schema = schema
+        self.last_kwargs = kwargs
         if self.error:
             raise self.error
         return self.parsed
@@ -210,3 +212,73 @@ class TestClassifyGate3:
         chat = FakeChat(error=ValueError("structured output not parsed (refusal: x)"))
         with pytest.raises(ValueError, match="refusal"):
             classify_ticket_gate3(make_ticket(), chat)
+
+
+class TestFewShotExamples:
+    def test_examples_rendered_into_prompt(self):
+        from triage.models import LabelledTicket
+
+        example = LabelledTicket(
+            ticket_id="INC000045",
+            created_at=datetime.now(UTC),
+            short_description="Printer spool error in warehouse",
+            description="Spool request stuck in SP01.",
+            requester="history@example.com",
+            type=TicketType.INCIDENT,
+            category=Category.OUTPUT_PRINTING,
+            impact=Level.LOW,
+            urgency=Level.LOW,
+            priority=Priority.P4,
+            assignment_group=AssignmentGroup.BASIS,
+            tier="L1",
+            resolution_notes="Spool request reprocessed; output delivered.",
+        )
+        schema = _schema_for(frozenset({"type", "category", "assignment_group"}))
+        parsed = schema(
+            type=TicketType.INCIDENT,
+            category=Category.OUTPUT_PRINTING,
+            assignment_group=AssignmentGroup.BASIS,
+            impact=Level.LOW,
+            urgency=Level.LOW,
+            rationale="Matches resolved spool example.",
+        )
+        chat = FakeChat(parsed)
+        verdict = classify_ticket_gate3(make_ticket(), chat, examples=[example])
+
+        user_msg = chat.last_messages[1]["content"]
+        assert "Printer spool error in warehouse" in user_msg
+        assert "priority=P4" in user_msg
+        assert "Spool request reprocessed" in user_msg
+        assert verdict is not None
+
+    def test_no_examples_omits_block(self):
+        schema = _schema_for(frozenset({"type", "category", "assignment_group"}))
+        chat = FakeChat(
+            schema(
+                type=TicketType.INCIDENT,
+                category=Category.SHORT_DUMP,
+                assignment_group=AssignmentGroup.ABAP,
+                impact=Level.LOW,
+                urgency=Level.LOW,
+                rationale="No neighbours.",
+            )
+        )
+        classify_ticket_gate3(make_ticket(), chat)
+        assert "reference tickets" not in chat.last_messages[1]["content"]
+
+
+def test_gate3_pins_temperature_zero():
+    """Determinism: default temperature caused a 7pt eval swing; pin it."""
+    schema = _schema_for(frozenset({"type", "category", "assignment_group"}))
+    chat = FakeChat(
+        schema(
+            type=TicketType.INCIDENT,
+            category=Category.SHORT_DUMP,
+            assignment_group=AssignmentGroup.ABAP,
+            impact=Level.LOW,
+            urgency=Level.LOW,
+            rationale="Deterministic call.",
+        )
+    )
+    classify_ticket_gate3(make_ticket(), chat)
+    assert chat.last_kwargs["temperature"] == 0.0

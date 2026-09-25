@@ -20,6 +20,7 @@ from triage.models import (
     LABEL_FIELDS,
     AssignmentGroup,
     Category,
+    LabelledTicket,
     Level,
     TicketInput,
     TicketType,
@@ -62,6 +63,14 @@ URGENCY — how time-critical (independent of impact):
 Judge impact and urgency INDEPENDENTLY from the narrative — a company-wide
 issue with no deadline is high impact + low urgency, not automatically urgent.
 
+CRITICAL DISTINCTIONS:
+- Scope is NOT urgency: A problem affecting an entire team or company where
+  users can still work or use a workaround is LOW or MEDIUM urgency, despite
+  high impact.
+- Urgency is about time degradation: A deadline later this week is MEDIUM
+  urgency, not high. Reserve HIGH urgency strictly for active operational
+  stoppages or deadlines due today.
+
 Fields already verified by earlier gates are stated in the ticket context —
 treat them as ground truth and do not reconsider them."""
 
@@ -89,6 +98,22 @@ def _schema_for(missing: frozenset[str]) -> type[BaseModel]:
     return schema
 
 
+def _format_examples(examples: list[LabelledTicket]) -> str:
+    """Render resolved neighbours as few-shot grounding for the prompt."""
+    lines = []
+    for i, t in enumerate(examples, 1):
+        line = (
+            f'{i}. "{t.short_description}" -> type={t.type.value}, '
+            f"category={t.category.value}, impact={t.impact.value}, "
+            f"urgency={t.urgency.value}, priority={t.priority.value}, "
+            f"group={t.assignment_group.value}"
+        )
+        if t.resolution_notes:
+            line += f"; resolved: {t.resolution_notes}"
+        lines.append(line)
+    return "\n".join(lines)
+
+
 def _locked_labels(verdict: TriageVerdict | None) -> dict[str, object]:
     if verdict is None:
         return {}
@@ -100,6 +125,7 @@ def classify_ticket_gate3(
     chat: ChatModel,
     locked: TriageVerdict | None = None,
     *,
+    examples: list[LabelledTicket] | None = None,
     system_prompt: str = _SYSTEM_PROMPT,
 ) -> TriageVerdict | None:
     """Fill the labels `locked` left open; return a merged verdict.
@@ -107,6 +133,9 @@ def classify_ticket_gate3(
     `locked` is the partial verdict from Gate 1/2 (or None for a full
     fallback). Locked values are echoed back as context and win any
     disagreement — the schema doesn't even offer those fields.
+    `examples` are the resolved neighbours Gate 2 retrieved; they ground
+    the model's judgment in how this desk actually labelled similar issues
+    (few-shot), including the impact/urgency calls.
     """
     start = time.perf_counter()
     known = _locked_labels(locked)
@@ -116,11 +145,18 @@ def classify_ticket_gate3(
         return locked
 
     context = "; ".join(f"{f}={v!r}" for f, v in sorted(known.items())) if known else "none"
+    examples_block = (
+        f"Resolved reference tickets from our history (most similar first):\n"
+        f"{_format_examples(examples)}\n\n"
+        if examples
+        else ""
+    )
     messages = [
         {"role": "system", "content": system_prompt},
         {
             "role": "user",
             "content": (
+                f"{examples_block}"
                 f"Ticket:\n"
                 f"Short: {ticket.short_description}\n\n"
                 f"{ticket.description}\n\n"
@@ -131,7 +167,9 @@ def classify_ticket_gate3(
     ]
 
     schema = _schema_for(missing)
-    parsed = chat.complete_structured(messages, schema)
+    # temperature=0: eval comparisons are meaningless if the model re-rolls
+    # the dice every run (default temp caused a ±7pt swing on this eval set).
+    parsed = chat.complete_structured(messages, schema, temperature=0.0)
 
     labels: dict[str, object] = dict(known)
     label_source: dict[str, Literal["rules", "similarity", "model"]] = dict(
