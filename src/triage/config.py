@@ -45,6 +45,11 @@ class Settings(BaseSettings):
     openai_chat_model: str | None = None
     openai_embedding_model: str | None = None
 
+    # Azure AI Search (optional retrieval backend)
+    azure_search_endpoint: str | None = None
+    azure_search_key: str | None = None
+    azure_search_index_name: str = "tickets-history"
+
     @field_validator("azure_openai_api_version", mode="before")
     @classmethod
     def _default_api_version(cls, value: object) -> object:

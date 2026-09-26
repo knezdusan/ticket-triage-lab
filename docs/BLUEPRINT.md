@@ -3,7 +3,7 @@
 > Single source of truth for this project. Read it in full before doing any work.
 > Humans and agents both work from this file. When reality changes, update this file in the same change.
 
-Last updated: 2026-09-25
+Last updated: 2026-09-26
 
 ---
 
@@ -149,6 +149,7 @@ src/triage/
   classifier.py Gate 3: structured output via dynamic schemas, ITIL decomposed rubric, few-shot examples, temp=0.0
   cascade.py    Assembly line pipeline: rules -> similarity -> model, provenance merge
   evaluate.py   Wilson score intervals, 4x4 confusion matrix, severe over/under-calls, ceiling ratios
+  search_index.py Azure AI Search backend mirroring SimilarityIndex (schema + upload + top-k); owns azure-search-documents SDK
   ceiling.py    label-noise accuracy ceilings computed from taxonomy.py
   probe.py      structured-output / logprob probes used on Wed 23
   utils.py      retry(), chunks()
@@ -161,6 +162,7 @@ scripts/
   eval_gate2.py    Gate 2 leave-one-out calibration sweep across (k, theta)
   audit_urgency.py per-ticket urgency adjudication dump -> data/eval_verdicts.jsonl
   audit_data.py    offline data audit for phrasing leaks and guardrail compliance
+  verify_azure_search.py live parity check: Azure AI Search vs NumPy index (needs credentials)
 data/           tickets.jsonl · history.jsonl · eval.jsonl · eval_p1.jsonl · history_index.npz · clusters.json · eval_verdicts.jsonl · REPORT.md
 tests/          165 offline unit tests (100% mocked, zero network calls)
 ```
@@ -191,11 +193,11 @@ tests/          165 offline unit tests (100% mocked, zero network calls)
 | Wed 23 | Azure OpenAI patterns · review and fix synthetic data | **Done** — structured outputs + logprobs verified live (D16–D18); data audit fixes (D12–D15) |
 | Thu 24 | Gate 1 rules · Gate 2 similarity | **Done** — Gate 1 100% precision @ ~2.5% coverage; Gate 2 leave-one-out calibration sweep (k=1, θ=0.75 → 95.9% category accuracy) |
 | Fri 25 | Gate 3 model classification · cascade wiring · Evaluation harness (pulled forward) | **Done** — assembly-line cascade with validated `label_source`, dynamic schema factory, ITIL decomposed rubric, 95% Wilson intervals, 4x4 confusion matrix, P1 stress validation (96.7% recall), temperature pinned to 0.0 |
-| Sat 26 | Retrieval on Azure AI Search (fallback pgvector) | Up next |
+| Sat 26 | Retrieval on Azure AI Search (fallback pgvector) | **Done** — `AzureSearchIndex` built + verified live (D26): 9/9 top-3 overlap vs numpy, cosine score formula `1/(2−cos)` confirmed, deliberately not wired into cascade |
 | Sun 27 | **Rest** | — |
-| Mon 28 | Evaluation harness | **Completed early on Fri 25** (buffer day / catch-up / review) |
-| Tue 29 | Document Intelligence (half day) · SAP BTP / ServiceNow orientation | Droppable |
-| Wed 30 | README, tidy, delete nothing yet, rest | — |
+| Mon 28 | Evaluation harness (pulled forward to Fri 25) | **Completed early** — Mon freed for Document Intelligence (half day) + re-run eval to confirm temp=0.0 determinism |
+| Tue 29 | README (pulled forward) · SAP BTP / ServiceNow orientation | Moved up from Wed 30 |
+| Wed 30 | Buffer / tidy, delete nothing yet, rest | — |
 
 **If behind, drop in this order:** Document Intelligence → Azure AI Search (use pgvector) → BTP reading. Never drop: Pydantic, the three gates, evaluation.
 
@@ -230,6 +232,7 @@ tests/          165 offline unit tests (100% mocked, zero network calls)
 | D23 | Decomposed priority rubric & ground-truth label noise | Priority is never asked directly of Gate 3; it predicts `impact: Level` and `urgency: Level`, and Python mechanically computes `derive_priority()`. Injecting explicit ITIL rubrics into `_SYSTEM_PROMPT` jumped priority from 43.3% to 66.7% (40.4% → 64.9% model-source). Diagnostic split showed impact at 93.0% vs urgency at 61.4%. Manual adjudication of 21 urgency misses revealed that ~half were synthetic label faults caused by a structural conflict in `datagen.py` (`IMPACT_SITUATIONS[high]` generates complete-stoppage text despite a sampled `urgency=low`). Real model error isolated to scope-to-urgency bleed (addressed via anti-bleed prompt lines); effective urgency accuracy ≈79%. |
 | D24 | Few-shot in-context learning null result | Passed Gate 2's consulted historical neighbours (incl. dissenters — contrastive signal) into Gate 3's prompt with their resolved labels via `SimilarityIndex.by_id` O(1) lookup. Measurement showed no statistically detectable accuracy change (all deltas ≤1.8 pts on n=57–60, well inside the ±12-pt Wilson interval) while cost rose +23% ($2.33 → $2.86/1k). Kept in code as structural grounding, but documented as an empirical null result consistent with the adjudication finding: retrieval context cannot overcome ground-truth label noise; remaining model error is ~5 tickets, below eval resolution. Side effect: `eval_gate2.py` twin% now means "twin among consulted neighbours" — a more honest memorization measure. |
 | D25 | Statistical evaluation harness, non-determinism fix, and P1 safety | Implemented `evaluate.py`: 95% Wilson score confidence intervals, 4x4 confusion matrix, ceiling ratios, severe under-call detection (P1→P3/P4, P2→P4), and severe over-call detection (P3/P4→P1, P4→P2). Discovered evaluation non-determinism caused a ±6.6-point sampling swing between identical runs; pinned `temperature=0.0` at the Gate 3 call site for reproducible evaluations. Realistic eval (n=60): assignment group 78.3% (89.0% of the 88.0% ceiling); type 71.7% (79.7% of the 90.0% ceiling); category 95.0%; priority 68.3% with 0 severe under-calls and 4 severe over-calls. P1 stress set (n=60): 96.7% P1 recall (29/30 caught as P1, 1 as P2, none dropped below P2), 82.9% P1 precision — graded honestly on a set containing no low-severity tickets, so it partly rewards the model's escalation bias; 1 severe under-call across 120 total evaluations. |
+| D26 | Azure AI Search backend verified at parity | `search_index.py` mirrors `SimilarityIndex` (create schema → upload → top-k) behind the same SDK-boundary rule as `llm.py`; `azure-search-documents` imported only there. Live verification (`scripts/verify_azure_search.py`, 240 docs): **9/9 top-3 rank overlap** vs exact NumPy — HNSW is effectively exact at this scale. Score semantics confirmed empirically, not from docs: Azure rescales cosine as `1/(2−cos)` — recover raw cosine as `2−1/score` (e.g. 0.7620 → 0.8077); values NOT comparable to numpy cosine, ordering identical. Latency ~700–1200ms hosted vs <3ms local — hosted buys scale/ops, not speed. Gotcha fixed live: `Edm.DateTimeOffset` rejects naive ISO strings; `_to_document` appends `Z` (dataset timestamps are UTC). Kept as a second interchangeable backend, deliberately NOT wired into the cascade — swapping the default buys nothing at n=240. |
 
 ---
 
