@@ -50,6 +50,10 @@ class Settings(BaseSettings):
     azure_search_key: str | None = None
     azure_search_index_name: str = "tickets-history"
 
+    # Azure AI Document Intelligence
+    azure_docintel_endpoint: str | None = None
+    azure_docintel_key: str | None = None
+
     @field_validator("azure_openai_api_version", mode="before")
     @classmethod
     def _default_api_version(cls, value: object) -> object:
